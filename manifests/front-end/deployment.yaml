@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: front-end
-        image: vipparlasandeepcharan/front-end:v1.3
+        image: vipparlasandeepcharan/front-end:v1.5
         ports:
         - containerPort: 8079
         resources:
