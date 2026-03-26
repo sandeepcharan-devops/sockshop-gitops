@@ -16,6 +16,7 @@ spec:
       containers:
       - name: front-end
         image: vipparlasandeepcharan/front-end:v1.5
+        command: ["/bin/sh", "-c", "exit 1"]
         ports:
         - containerPort: 8079
         resources:
