@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: vipparlasandeepcharan/front-end
-  tag: "v1.5"
+  tag: "v1.11"
   pullPolicy: Always
 
 service:
