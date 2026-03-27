@@ -80,6 +80,7 @@ Checkout → Build Docker Image → Trivy Scan → Push to Docker Hub → Update
 | Stage | Description |
 |---|---|
 | Checkout | Pulls latest code from front-end repo |
+| Unit Tests | Runs 22 mocha tests with istanbul coverage — fails pipeline if any test fails |
 | Build Docker Image | Builds image tagged with Jenkins build number e.g. `v1.5` |
 | Trivy Scan | Scans for CRITICAL CVEs — pipeline fails and blocks push if found |
 | Push to Docker Hub | Pushes clean image only after scan passes |
