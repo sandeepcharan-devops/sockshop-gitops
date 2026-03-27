@@ -74,7 +74,7 @@ This separation ensures:
 ### Jenkins Pipeline Stages
 
 ```
-Checkout → Build Docker Image → Trivy Scan → Push to Docker Hub → Update GitOps Repo → Cleanup
+Checkout → Unit test → Build Docker Image → Trivy Scan → Push to Docker Hub → Update GitOps Repo → Cleanup
 ```
 
 | Stage | Description |
