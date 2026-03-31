@@ -43,9 +43,17 @@ Rolling update with zero downtime
 
 ```
 sockshop-gitops/                  ← This repo (GitOps manifests)
-manifests/
-  └── front-end/
-      └── deployment.yaml         ← Front-end Kubernetes deployment
+├── manifests/
+│   └── front-end/
+│       └── deployment.yaml       ← Raw Kubernetes deployment manifest
+└── helm/
+    └── front-end/
+        ├── Chart.yaml            ← Helm chart metadata
+        ├── values.yaml           ← Default values
+        ├── values-dev.yaml       ← Dev environment overrides
+        ├── values-prod.yaml      ← Prod environment overrides
+        └── templates/
+            └── deployment.yaml   ← Parameterized Helm template
 
 front-end/                        ← Separate repo (application source)
   ├── Dockerfile                  ← Hardened, production-grade
@@ -74,17 +82,17 @@ This separation ensures:
 ### Jenkins Pipeline Stages
 
 ```
-Checkout → Unit test → Build Docker Image → Trivy Scan → Push to Docker Hub → Update GitOps Repo → Cleanup
+Checkout → Unit Tests → Build Docker Image → Trivy Scan → Push to Docker Hub → Update GitOps Repo → Cleanup
 ```
 
 | Stage | Description |
 |---|---|
 | Checkout | Pulls latest code from front-end repo |
 | Unit Tests | Runs 22 mocha tests with istanbul coverage — fails pipeline if any test fails |
-| Build Docker Image | Builds image tagged with Jenkins build number e.g. `v1.5` |
+| Build Docker Image | Builds image tagged with Jenkins build number e.g. `v1.15` |
 | Trivy Scan | Scans for CRITICAL CVEs — pipeline fails and blocks push if found |
 | Push to Docker Hub | Pushes clean image only after scan passes |
-| Update GitOps Repo | Updates `deployment.yaml` image tag automatically via `sed` + git push |
+| Update GitOps Repo | Updates `deployment.yaml` AND `helm/front-end/values.yaml` image tag automatically via `sed` + git push |
 | Cleanup | Removes local image to free disk space |
 
 ### Security Gate
@@ -244,6 +252,85 @@ Updated image tag in `deployment.yaml` to match the actual pushed tag. Automated
 
 ---
 
+## Helm Chart — Multi-Environment Deployment
+
+### Why Helm
+
+The raw `deployment.yaml` in `manifests/` has hardcoded values — one file, one environment. Helm converts it into a parameterized template, allowing the same chart to deploy with different configurations per environment.
+
+### Chart Structure
+
+```
+helm/front-end/
+├── Chart.yaml            ← Chart metadata (name, version, description)
+├── values.yaml           ← Default values — used as base
+├── values-dev.yaml       ← Dev overrides — lower resources, 1 replica
+├── values-prod.yaml      ← Prod overrides — higher resources, 3 replicas
+└── templates/
+    └── deployment.yaml   ← Template with {{ .Values.x }} placeholders
+```
+
+### Dev vs Prod Comparison
+
+| Setting | Dev | Prod |
+|---|---|---|
+| `replicaCount` | 1 | 3 |
+| `resources.requests.cpu` | 100m | 200m |
+| `resources.requests.memory` | 128Mi | 256Mi |
+| `resources.limits.cpu` | 300m | 500m |
+| `resources.limits.memory` | 256Mi | 512Mi |
+| `image.pullPolicy` | Always | Always |
+
+### How Helm Template Works
+
+Helm merges values files in order — `values.yaml` provides defaults, environment-specific files override them:
+
+```
+values.yaml (defaults)
+    +
+values-dev.yaml (overrides)
+    =
+Final rendered manifest
+```
+
+**Example template syntax:**
+```yaml
+spec:
+  replicas: {{ .Values.replicaCount }}        # Replaced with 1 (dev) or 3 (prod)
+  containers:
+  - image: {{ .Values.image.repository }}:{{ .Values.image.tag }}  # Replaced with actual image
+    resources:
+      limits:
+        memory: {{ .Values.resources.limits.memory }}  # 256Mi (dev) or 512Mi (prod)
+```
+
+### Dry Run — Preview Before Deploying
+
+```bash
+# Preview dev deployment
+helm template front-end helm/front-end -f helm/front-end/values-dev.yaml
+
+# Preview prod deployment
+helm template front-end helm/front-end -f helm/front-end/values-prod.yaml
+```
+
+### Argo CD + Helm Integration
+
+Argo CD automatically detects Helm charts by finding `Chart.yaml` in the source path. The `front-end-dev` Argo CD application is configured to:
+- Source: `helm/front-end` path in this repo
+- Values file: `values-dev.yaml`
+- Auto-sync: enabled — deploys automatically on every git push
+
+### Automated Image Tag Updates
+
+Every Jenkins build automatically updates the image tag in both files:
+- `manifests/front-end/deployment.yaml` — raw manifest
+- `helm/front-end/values.yaml` — Helm default values
+
+This ensures both deployment methods always use the latest built and scanned image.
+
+---
+
 ## Key Learnings
 
 1. **Resource requests are mandatory for HPA** — without them HPA is completely blind
@@ -252,6 +339,9 @@ Updated image tag in `deployment.yaml` to match the actual pushed tag. Automated
 4. **GitOps drift detection** — any manual kubectl change is automatically flagged by Argo CD
 5. **Trivy in CI** — security scanning belongs in the pipeline as a gate, not as a post-incident tool
 6. **Two-repo strategy** — separating app code from manifests gives clean audit trail and proper separation of concerns
+7. **Helm values hierarchy** — `values.yaml` sets defaults, environment files override — never duplicate what you can parameterize
+8. **`helm template` before deploy** — always dry-run to catch errors before they reach the cluster
+9. **sed quoting in Jenkins** — single quotes prevent variable expansion, use `'string'${VAR}'string'` pattern for mixed quoting inside shell blocks
 
 ---
 
@@ -263,6 +353,7 @@ Updated image tag in `deployment.yaml` to match the actual pushed tag. Automated
 | kubeadm | v1.29.15 |
 | Jenkins | v2.541.3 |
 | Argo CD | v3.3.4 |
+| Helm | v3.20.1 |
 | Trivy | Latest |
 | Docker | v28.x |
 | Node.js | v22 (LTS) |
