@@ -20,6 +20,10 @@ Argo CD detects change in sockshop-gitops
 Argo CD deploys to Kubernetes (sock-shop namespace)
         ↓
 Rolling update with zero downtime
+        ↓
+Prometheus scrapes pod metrics
+        ↓
+Grafana displays real-time dashboards
 ```
 
 ---
@@ -36,6 +40,7 @@ Rolling update with zero downtime
 | Image Registry | Docker Hub | Public registry |
 | Security Scanning | Trivy | CRITICAL CVE gate in pipeline |
 | Metrics | metrics-server | Required for HPA |
+| Monitoring | Prometheus + Grafana | kube-prometheus-stack v61.x via Helm |
 
 ---
 
@@ -331,6 +336,71 @@ This ensures both deployment methods always use the latest built and scanned ima
 
 ---
 
+## Monitoring — Prometheus & Grafana
+
+### Stack
+
+Installed using the **kube-prometheus-stack** Helm chart — the industry standard monitoring stack for Kubernetes.
+
+| Component | Role |
+|---|---|
+| Prometheus | Scrapes and stores metrics from all pods and Kubernetes components as time-series data |
+| Grafana | Queries Prometheus and visualizes metrics as dashboards and graphs |
+| AlertManager | Handles alerts triggered by Prometheus rules |
+| Node Exporter | Collects node-level metrics — CPU, memory, disk per EC2 instance |
+| kube-state-metrics | Collects Kubernetes object metrics — pod restarts, deployment status, HPA state |
+
+### How Prometheus Works
+
+Prometheus uses a **pull model** — it scrapes metrics from configured endpoints at regular intervals:
+
+```
+Prometheus
+  ├── scrapes /metrics endpoint on each pod
+  ├── scrapes Kubernetes API for cluster metrics
+  ├── scrapes Node Exporter for node metrics
+  └── stores everything as time-series data with timestamps
+```
+
+This is different from metrics-server which only stores current values in memory with no history.
+
+### Custom Sock Shop Dashboard
+
+Built a custom Grafana dashboard with 4 panels specifically for the front-end service:
+
+| Panel | PromQL Query | Purpose |
+|---|---|---|
+| CPU Usage | `rate(container_cpu_usage_seconds_total{namespace="sock-shop", pod=~"front-end.*"}[5m])` | Real-time CPU consumption |
+| Memory Usage | `container_memory_working_set_bytes{namespace="sock-shop", pod=~"front-end.*"}` | Memory in bytes — same metric Kubernetes uses for OOMKilled |
+| Pod Restarts | `kube_pod_container_status_restarts_total{namespace="sock-shop", pod=~"front-end.*"}` | Restart count — rising number means CrashLoopBackOff or OOMKilled |
+| Pod Health | `kube_pod_status_ready{namespace="sock-shop"}` | 1 = ready, 0 = not ready — instant health overview |
+
+### Key Monitoring Insights
+
+- **Memory panel** uses `container_memory_working_set_bytes` — this is exactly what Kubernetes checks against the memory limit. If it exceeds `256Mi`, OOMKilled happens
+- **Restart count panel** is the most important production alert — a rising number means the pod is crashing repeatedly before you even notice in kubectl
+- **CPU Usage** showed ~0.001 cores for front-end at idle — confirming `requests.cpu: 100m` is appropriately sized
+
+### Installation
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install prometheus-stack prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --set grafana.adminPassword=admin123 \
+  --set prometheus.prometheusSpec.retention=24h
+```
+
+Access Grafana:
+```bash
+kubectl patch svc prometheus-stack-grafana -n monitoring -p '{"spec": {"type": "NodePort"}}'
+kubectl get svc -n monitoring | grep grafana
+# Access via http://<node-ip>:<nodeport>
+```
+
+---
+
 ## Key Learnings
 
 1. **Resource requests are mandatory for HPA** — without them HPA is completely blind
@@ -341,6 +411,7 @@ This ensures both deployment methods always use the latest built and scanned ima
 6. **Two-repo strategy** — separating app code from manifests gives clean audit trail and proper separation of concerns
 7. **Helm values hierarchy** — `values.yaml` sets defaults, environment files override — never duplicate what you can parameterize
 8. **`helm template` before deploy** — always dry-run to catch errors before they reach the cluster
+10. **Prometheus pull model** — Prometheus scrapes endpoints, it does not receive pushed metrics — this affects how you configure exporters
 9. **sed quoting in Jenkins** — single quotes prevent variable expansion, use `'string'${VAR}'string'` pattern for mixed quoting inside shell blocks
 
 ---
@@ -359,6 +430,8 @@ This ensures both deployment methods always use the latest built and scanned ima
 | Node.js | v22 (LTS) |
 | Calico CNI | v3.26.0 |
 | metrics-server | Latest |
+| Prometheus | kube-prometheus-stack |
+| Grafana | kube-prometheus-stack |
 
 ---
 
